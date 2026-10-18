@@ -2526,6 +2526,54 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): Agen
     scheduler.kickMember(workspace, teamId, memberName)
   ))
 
+  ctx.tools.register(defineTool({
+    name: 'agent_teams_set_member_model',
+    description: 'Change one member\'s model route without recreating it. The member keeps its session and history; the new route takes effect on its next step, and the host records a "[model changed: …]" notice. A member that is not currently live has the route persisted for its next activation. Use only when the user asks to switch a teammate\'s model or when the current route is failing.',
+    parameters: {
+      member: { type: 'string', required: true, description: 'Name of the member whose route changes.' },
+      provider: { type: 'string', required: true, description: 'LLM provider route that serves the model. Used verbatim.' },
+      model: { type: 'string', required: true, description: 'Model id served by the provider. Used verbatim; a "/" is part of the id, never a provider separator.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          member_name: { type: 'string', required: true },
+          previous: { type: 'string', required: true },
+          provider: { type: 'string', required: true },
+          model: { type: 'string', required: true },
+          live: { type: 'boolean', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `Member "${value.member_name}" model route changed${value.previous === '' ? '' : ` from ${value.previous}`} to ${value.provider}/${value.model}${value.live ? ' (applies to its next step)' : ' (persisted; applies when it next activates)'}.`,
+      }],
+    },
+    async execute(args, exec) {
+      const captain = requireCaptain(exec)
+      const workspace = workspaceOf(captain)
+      const stateRoot = stateRootOf(workspace, config)
+      const team = await requireCaptainTeam(ctx, workspace, config, captain)
+      const changed = await memberSelections.setRoute({
+        stateRoot,
+        teamId: team.id,
+        memberName: args.member,
+        provider: args.provider,
+        model: args.model,
+        signal: exec.signal,
+      })
+      return {
+        member_name: args.member,
+        previous: changed.previous,
+        provider: args.provider,
+        model: args.model,
+        live: changed.live,
+      }
+    },
+  }))
+
   const runtime: AgentTeamsRuntime = {
     isPendingMember: memberSelections.isPendingMember,
     updateStagedPlan,

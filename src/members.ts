@@ -147,6 +147,25 @@ export interface MemberSelectionRuntime {
     operation: () => Promise<T>,
     setup?: TeamMember['runtimeSetup'],
   ): Promise<T>
+  /**
+   * Switch one member's LLM route without recreating it.
+   *
+   * A live child keeps its session and history: mutating the same selection ref
+   * `installModelSelection` reads makes the next prompt assembly and request use
+   * the new route, and the host appends its own `[model changed: …]` notice. A
+   * member that is not live has the route persisted (`activeProvider` /
+   * `activeModel`) for its next activation.
+   * @returns the previous route label and whether a live child was updated.
+   */
+  setRoute(input: {
+    stateRoot: string
+    teamId: string
+    memberName: string
+    provider: string
+    model: string
+    reasoningEffort?: string
+    signal?: AbortSignal
+  }): Promise<{ previous: string; live: boolean }>
 }
 
 /**
@@ -625,6 +644,10 @@ export function installMemberSelectionRuntime(
 ): MemberSelectionRuntime {
   const pending = new Map<string, MemberLlmSelection>()
   const pendingSetup = new Map<string, NonNullable<TeamMember['runtimeSetup']>>()
+  // Live child a running-member route switch can reach. Keyed by team and member
+  // name rather than child id: a cold resume replaces the child but keeps the
+  // identity the team record and the tools address.
+  const liveRoutes = new Map<string, { current: ModelSelection; assembled: ModelSelection | undefined }>()
   installContinuableMemberSetup(ctx, (childCtx, child) => {
     const descriptor = foldSubagentDescriptor(sessionOwnEvents(child.session))
     if (descriptor?.mode !== 'continuable' || !descriptor.label.startsWith(MEMBER_LABEL_PREFIX)) {
@@ -741,6 +764,8 @@ export function installMemberSelectionRuntime(
     if (selection === undefined) return () => { disposeFailure(); cleanupAdmission() }
     const selectionRef = { current: modelSelection(selection), assembled: undefined as ModelSelection | undefined }
     const disposeSelection = installModelSelection(childCtx, selectionRef)
+    const routeKey = `${teamId}\u0000${memberName}`
+    liveRoutes.set(routeKey, selectionRef)
     const fallback = selection.fallback
     let switched = false
     const disposeFallback = childCtx.on('agent/request-error', async (payload, next) => {
@@ -764,6 +789,7 @@ export function installMemberSelectionRuntime(
       return next()
     })
     return () => {
+      if (liveRoutes.get(routeKey) === selectionRef) liveRoutes.delete(routeKey)
       disposeFallback()
       disposeSelection()
       disposeFailure()
@@ -797,6 +823,39 @@ export function installMemberSelectionRuntime(
         pending.delete(key)
         pendingSetup.delete(key)
       }
+    },
+    async setRoute({ stateRoot, teamId, memberName, provider, model, reasoningEffort, signal }) {
+      const route: MemberLlmSelection = {
+        provider,
+        model,
+        ...reasoningEffort === undefined || reasoningEffort.trim() === '' || reasoningEffort.trim().toLowerCase() === 'default'
+          ? {}
+          : { reasoningEffort },
+      }
+      // A route the catalog does not serve is a hard error here, at the call the
+      // captain can still react to — never a child that boots and fails its
+      // first request.
+      await validateMemberLlmSelections(ctx, [route], signal)
+      const key = `${teamId}\u0000${memberName}`
+      const ref = liveRoutes.get(key)
+      const previousRoute = ref?.current ?? ref?.assembled
+      const previous = previousRoute === undefined ? '' : `${previousRoute.provider}/${previousRoute.model}`
+      // The live ref is what `installModelSelection` snapshots on the next
+      // prompt assembly; updating it is the whole switch for a running member.
+      if (ref !== undefined) ref.current = modelSelection(route)
+      // Persist on the team record so a cold resume keeps the new route even
+      // after the child Agent is gone.
+      await withTeamLock(`team:${stateRoot}:${teamId}`, async () => {
+        const team = await readTeam(stateRoot, teamId)
+        if (team === undefined) throw new Error(`no team "${teamId}"`)
+        const member = team.members.find(candidate => candidate.name === memberName && candidate.status !== 'removed')
+        if (member === undefined) throw new Error(`no live member "${memberName}" in team "${team.name}"`)
+        member.activeProvider = provider
+        member.activeModel = model
+        member.fallbackActive = false
+        await writeTeam(stateRoot, team)
+      })
+      return { previous, live: ref !== undefined }
     },
   }
 }
