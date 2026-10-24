@@ -144,6 +144,23 @@ export declare function createMessage(from: string, to: string, content: string)
  */
 export declare function appendMailbox(stateRoot: string, teamId: string, agentKey: string, message: TeamMessage): Promise<void>;
 /**
+ * Recover a reassignment that stopped between its two locks.
+ *
+ * `reassign_task` fences the old owner (`member.stopping`) and the task
+ * (`task.reassigning`) under one lock, drains the member, and only then clears
+ * them under a second lock. A drain error, a cancelled captain turn or a
+ * process restart in that window leaves both flags durably set: the member then
+ * fails every availability check and every step admission, and the task can be
+ * neither claimed nor reassigned to anyone else. A halt or a resume is the
+ * captain's explicit "that work is over", so it must be able to release them.
+ *
+ * @param team - the team state, mutated in place.
+ * @param force - true after a halt (every in-flight handoff is over); false when
+ * recovering, where only provably dead pairs are released.
+ * @returns how many flags were cleared.
+ */
+export declare function releaseHandoffFences(team: TeamState, force: boolean): number;
+/**
  * Read one agent's whole mailbox, oldest first.
  * @param stateRoot - resolved absolute state root directory.
  * @param teamId - the team id.

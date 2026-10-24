@@ -101,7 +101,7 @@ export function installMailboxAdmission(ctx: Context, stateDir: string): void {
         return decision
       }
     }
-    const batches = new Map<string, { receipt: Receipt; ids: Set<string>; current: Map<string, TeamMessage>; failed?: boolean }>()
+    const batches = new Map<string, { receipt: Receipt; ids: Set<string>; current: Map<string, TeamMessage>; failed?: boolean; unresolved?: boolean }>()
     const inputs = decision.messages.map(input => {
       // Alpha.5/0.1.2-rc.1 public steering prepends a native sender block.
       // The host-authored receipt remains a separate text block after it.
@@ -119,7 +119,15 @@ export function installMailboxAdmission(ctx: Context, stateDir: string): void {
       try {
         await withTeamLock(`team:${root}:${receipt.teamId}`, async () => {
           const team = await readTeam(root, receipt.teamId)
-          if (team === undefined) return
+          if (team === undefined) {
+            // The team was archived between dispatch and this step. There are no
+            // current messages to swap in, but the input also carries the
+            // message body: treating "nothing to resolve" as "obsolete" deleted
+            // the whole block silently, and a turn whose only input it was
+            // became an empty step. Pass it through instead.
+            batch.unresolved = true
+            return
+          }
           // Captain mail is admitted for any lead session of the team: after a
           // fork the human reads it in the fork while members still address the
           // recorded captain. Acknowledging marks it read for both.
@@ -147,7 +155,7 @@ export function installMailboxAdmission(ctx: Context, stateDir: string): void {
     for (const { input, receipt, batch } of inputs) {
       if (input.source?.kind === 'subagent-settled' && redundantSettlements.has(input.source.senderSessionId)
         && input.source.summary === `Background subagent ${input.source.senderSessionId} finished and will do no further work unless you send it more.`) continue
-      if (receipt === undefined || batch === undefined || batch.failed === true) { admitted.push(input); continue }
+      if (receipt === undefined || batch === undefined || batch.failed === true || batch.unresolved === true) { admitted.push(input); continue }
       const messages = []
       for (const id of receipt.ids) {
         const message = batch.current.get(id)

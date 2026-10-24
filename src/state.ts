@@ -52,6 +52,17 @@ export type { ContractAmendmentInput } from './quality-gates.ts'
 export const CAPTAIN_KEY = 'captain'
 /** A crashed live-delivery attempt becomes retryable after this interval. */
 const MAILBOX_DELIVERY_LEASE_MS = 60_000
+/**
+ * How many settled (read or discarded) mailbox records survive compaction.
+ *
+ * A mailbox is append-only JSONL that every append and every acknowledgement
+ * rewrites in full, and every consumer reads in full — the activity route polls
+ * it per team and per member. Leaving settled rows there forever made delivery
+ * cost grow with the square of the team's traffic and made each poll parse the
+ * whole history. Unread records are never dropped, and unparseable lines stay
+ * byte-for-byte so a damaged record is still diagnosable.
+ */
+const MAILBOX_SETTLED_RETAIN = 64
 /** Durable deny-list for AgentTeams members that must never be resumed. */
 const RETIRED_MEMBERS_FILE = 'retired-members.json'
 
@@ -448,6 +459,51 @@ export async function appendMailbox(
 }
 
 /**
+ * Recover a reassignment that stopped between its two locks.
+ *
+ * `reassign_task` fences the old owner (`member.stopping`) and the task
+ * (`task.reassigning`) under one lock, drains the member, and only then clears
+ * them under a second lock. A drain error, a cancelled captain turn or a
+ * process restart in that window leaves both flags durably set: the member then
+ * fails every availability check and every step admission, and the task can be
+ * neither claimed nor reassigned to anyone else. A halt or a resume is the
+ * captain's explicit "that work is over", so it must be able to release them.
+ *
+ * @param team - the team state, mutated in place.
+ * @param force - true after a halt (every in-flight handoff is over); false when
+ * recovering, where only provably dead pairs are released.
+ * @returns how many flags were cleared.
+ */
+export function releaseHandoffFences(team: TeamState, force: boolean): number {
+  let released = 0
+  // Only a member that still exists is a live fence: a removed owner cannot be
+  // draining anything, so its pair is stale even without a forced release.
+  const fencedMembers = new Set(team.tasks
+    .filter(task => task.reassigning === true && task.handoffFromMemberId !== undefined
+      && team.members.some(member => member.id === task.handoffFromMemberId && member.status !== 'removed'))
+    .map(task => task.handoffFromMemberId))
+  for (const member of team.members) {
+    if (member.stopping !== true) continue
+    if (!force && fencedMembers.has(member.id)) continue
+    delete member.stopping
+    released += 1
+  }
+  for (const task of team.tasks) {
+    if (task.reassigning !== true) continue
+    const drained = task.handoffFromMemberId === undefined
+      ? undefined
+      : team.members.find(member => member.id === task.handoffFromMemberId)
+    // A resumed team still holds a live fence: the member may genuinely be
+    // draining, so only release the pair when the drained member is gone.
+    if (!force && drained !== undefined && drained.status !== 'removed') continue
+    task.reassigning = false
+    delete task.handoffFromMemberId
+    released += 1
+  }
+  return released
+}
+
+/**
  * Read one agent's whole mailbox, oldest first.
  * @param stateRoot - resolved absolute state root directory.
  * @param teamId - the team id.
@@ -539,7 +595,26 @@ async function mutateMailbox(
       return rawLine
     }
   })
-  await atomicWriteText(file, lines.join('\n'))
+  // Compact in the same write that acknowledges the messages: settled rows are
+  // what every later append, ack and poll would otherwise carry forever. Order
+  // is the mailbox's own history, so rows keep their positions — dropping a row
+  // must never move another one.
+  const classified = lines.map((rawLine) => {
+    const line = stripLeadingBom(rawLine)
+    if (line.trim() === '') return { rawLine, settled: undefined as boolean | undefined }
+    let value: unknown
+    try { value = JSON.parse(line) } catch { return { rawLine, settled: undefined } }
+    if (!isTeamMessage(value)) return { rawLine, settled: undefined }
+    return { rawLine, settled: value.readAt !== undefined || value.discardedAt !== undefined }
+  })
+  const settledCount = classified.filter(entry => entry.settled === true).length
+  let droppable = Math.max(0, settledCount - MAILBOX_SETTLED_RETAIN)
+  const retained: string[] = []
+  for (const entry of classified) {
+    if (entry.settled === true && droppable > 0) { droppable -= 1; continue }
+    retained.push(entry.rawLine)
+  }
+  await atomicWriteText(file, retained.length === 0 ? '' : `${retained.join('\n')}\n`)
 }
 
 /** Lease selected fallback messages to one delivery path. */

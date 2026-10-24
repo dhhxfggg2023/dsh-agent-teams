@@ -37,6 +37,7 @@ import {
   readUnreadMailbox,
   readMailbox,
   recordRetiredMemberIds,
+  releaseHandoffFences,
   releaseMailboxDelivery,
   readTeam,
   sanitizeKey,
@@ -557,6 +558,10 @@ export async function haltTeamWork(input: {
       if (member.status === 'removed') continue
       member.status = 'idle'
     }
+    // Every unfinished task was just cancelled, so no handoff can still be
+    // running: leaving a fence behind would keep that member unavailable and
+    // that task unassignable for the rest of the team's life.
+    releaseHandoffFences(fresh, true)
     fresh.halted = true
     fresh.haltedAt = now
     await writeTeam(input.stateRoot, fresh)
@@ -1539,6 +1544,10 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): Agen
           }
           fresh.halted = false
           fresh.haltedAt = undefined
+          // Creating a task with resume=true is the same restart boundary as
+          // agent_teams_resume; release any fence an interrupted reassignment
+          // left behind so the roster is usable again.
+          releaseHandoffFences(fresh, false)
           appendTeamEvent(ctx, captainSessionOf(ctx, fresh.captainSessionId, captain.session), 'agent-teams/team-resumed', {
             teamId: fresh.id,
             reason: args.resumeReason ?? '',
@@ -2461,6 +2470,10 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): Agen
         if (resumed.status === 'resumed') {
           fresh.halted = false
           fresh.haltedAt = undefined
+          // A resume is the captain's explicit restart: it must also release a
+          // fence left by a reassignment that was interrupted before its second
+          // lock, or that member and task stay unusable for good.
+          releaseHandoffFences(fresh, false)
           await writeTeam(stateRoot, fresh)
           appendTeamEvent(ctx, captainSessionOf(ctx, fresh.captainSessionId, captain.session), 'agent-teams/team-resumed', {
             teamId: fresh.id,

@@ -382,6 +382,9 @@ function StagedMemberEditor({ team, member, modelDirectory, onPendingChange, t }
   }, [busy, dirty, member.name, onPendingChange])
 
   useEffect(() => {
+    // A polled remote change must never overwrite text the user is typing: the
+    // dirty badge would disappear in the same render, so the loss was silent.
+    if (dirty || busy) return
     setRole(member.role)
     setProvider(member.provider ?? '')
     setModel(member.model ?? '')
@@ -502,6 +505,9 @@ function StagedTaskEditor({ team, task, onPendingChange, t }: {
   }, [busy, dirty, onPendingChange, task.id])
 
   useEffect(() => {
+    // Same guard as the member editor: a polled change must not replace an
+    // unsaved edit, or the dirty badge clears while the text silently changes.
+    if (dirty || busy) return
     setSubject(task.subject)
     setDescription(task.description ?? '')
     setAssignee(task.assignee)
@@ -537,6 +543,9 @@ function StagedTaskEditor({ team, task, onPendingChange, t }: {
     }
   }
   const remove = async (): Promise<void> => {
+    // Guarded against a double click and against a concurrent save: both would
+    // otherwise post a second mutation against a task the first one removed.
+    if (busy) return
     setBusy(true)
     setFeedback(undefined)
     try {
@@ -549,6 +558,10 @@ function StagedTaskEditor({ team, task, onPendingChange, t }: {
       setFeedback({ tone: 'success', message: t('plan.removed') })
     } catch (error: unknown) {
       setFeedback({ tone: 'error', message: t('plan.failed', { message: errorMessage(error) }) })
+    } finally {
+      // The snapshot normally unmounts this card on success; clearing busy
+      // unconditionally keeps a mutation that returns ok without changing the
+      // polled snapshot from disabling the card forever.
       setBusy(false)
     }
   }
@@ -593,8 +606,8 @@ function StagedTaskEditor({ team, task, onPendingChange, t }: {
           {confirmingRemove && (
             <span className={css.planConfirm} role="alert">
               <span>{t('plan.removeWarning', { task: task.id })}</span>
-              <button type="button" onClick={() => { setConfirmingRemove(false) }}>{t('plan.cancel')}</button>
-              <button type="button" data-danger data-confirming onClick={() => { void remove() }}>{t('plan.removeConfirm')}</button>
+              <button type="button" disabled={busy} onClick={() => { setConfirmingRemove(false) }}>{t('plan.cancel')}</button>
+              <button type="button" data-danger data-confirming disabled={busy} onClick={() => { void remove() }}>{t('plan.removeConfirm')}</button>
             </span>
           )}
           <span className={css.planActions}>
@@ -622,6 +635,7 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
   const [newTask, setNewTask] = useState('')
   const [busy, setBusy] = useState(false)
   const [discardArmed, setDiscardArmed] = useState(false)
+  const [approveArmed, setApproveArmed] = useState(false)
   const [pendingEditors, setPendingEditors] = useState<ReadonlySet<string>>(new Set())
   const [feedback, setFeedback] = useState<PlanFeedback>()
   useDismissSuccess(feedback, setFeedback)
@@ -667,6 +681,7 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
   }
 
   const approve = async (): Promise<void> => {
+    if (busy) return
     setBusy(true)
     setFeedback(undefined)
     try {
@@ -676,7 +691,13 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
         action: 'approve',
       })
     } catch (error: unknown) {
+      setApproveArmed(false)
       setFeedback({ tone: 'error', message: t('plan.failed', { message: errorMessage(error) }) })
+    } finally {
+      // Approving spawns members and starts work, so the armed state must not
+      // survive; a 200 that does not change the polled snapshot must not leave
+      // every control disabled either.
+      setApproveArmed(false)
       setBusy(false)
     }
   }
@@ -742,22 +763,24 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
           <span><strong>{t('plan.members.title')}</strong><small>{t('plan.members.count', { count: team.members.length })}</small></span>
           <DisclosureChevron open={membersOpen} />
         </button>
-        {membersOpen && (
-          <div id={membersId} className={css.planList}>
-            {team.members.length === 0
-              ? <p className={css.planEmpty}>{t('plan.members.empty')}</p>
-              : team.members.map((member) => (
-                <StagedMemberEditor
-                  key={member.name}
-                  team={team}
-                  member={member}
-                  modelDirectory={modelDirectory}
-                  onPendingChange={onPendingChange}
-                  t={t}
-                />
-              ))}
-          </div>
-        )}
+        {/* Collapsing hides the section instead of unmounting it. Unmounting
+            discarded the editors' typed-but-unsaved text AND their pending
+            flag, so collapsing a section made "Approve & Run" look safe while
+            the plan still held none of the edits the user had just made. */}
+        <div id={membersId} className={css.planList} style={{ display: membersOpen ? undefined : 'none' }}>
+          {team.members.length === 0
+            ? <p className={css.planEmpty}>{t('plan.members.empty')}</p>
+            : team.members.map((member) => (
+              <StagedMemberEditor
+                key={member.name}
+                team={team}
+                member={member}
+                modelDirectory={modelDirectory}
+                onPendingChange={onPendingChange}
+                t={t}
+              />
+            ))}
+        </div>
       </section>
 
       <section className={css.planSection}>
@@ -765,13 +788,11 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
           <span><strong>{t('plan.tasks.title')}</strong><small>{t('plan.tasks.count', { count: team.tasks.length, links: dependencyLinks })}</small></span>
           <DisclosureChevron open={tasksOpen} />
         </button>
-        {tasksOpen && (
-          <div id={tasksId} className={css.planList}>
-            {team.tasks.length === 0
-              ? <p className={css.planEmpty}>{t('plan.tasks.empty')}</p>
-              : team.tasks.map((task) => <StagedTaskEditor key={task.id} team={team} task={task} onPendingChange={onPendingChange} t={t} />)}
-          </div>
-        )}
+        <div id={tasksId} className={css.planList} style={{ display: tasksOpen ? undefined : 'none' }}>
+          {team.tasks.length === 0
+            ? <p className={css.planEmpty}>{t('plan.tasks.empty')}</p>
+            : team.tasks.map((task) => <StagedTaskEditor key={task.id} team={team} task={task} onPendingChange={onPendingChange} t={t} />)}
+        </div>
       </section>
 
       <form className={css.planNewTask} onSubmit={(event) => { void addTask(event) }}>
@@ -791,16 +812,20 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
         <span className={css.planApproveCopy}>
           <strong>{discardArmed
             ? t('plan.discardConfirmTitle')
-            : waitingForFeedback
-              ? t('plan.feedbackTitle')
-              : t('plan.approveTitle')}</strong>
+            : approveArmed
+              ? t('plan.approveConfirmTitle')
+              : waitingForFeedback
+                ? t('plan.feedbackTitle')
+                : t('plan.approveTitle')}</strong>
           <small>{discardArmed
             ? t('plan.discardWarning')
-            : waitingForFeedback
-              ? t('plan.feedbackHint')
-              : hasPendingEdits
-                ? t('plan.pendingEdits')
-                : t('plan.approveHint', { members: team.members.length, tasks: team.tasks.length })}</small>
+            : approveArmed
+              ? t('plan.approveWarning')
+              : waitingForFeedback
+                ? t('plan.feedbackHint')
+                : hasPendingEdits
+                  ? t('plan.pendingEdits')
+                  : t('plan.approveHint', { members: team.members.length, tasks: team.tasks.length })}</small>
         </span>
         <Feedback value={feedback} />
         {discardArmed ? (
@@ -810,10 +835,21 @@ export function StagingPlanEditor({ team, modelDirectory, onContinuePlanning, on
               {busy ? t('plan.discarding') : t('plan.discardConfirm')}
             </button>
           </span>
+        ) : approveArmed ? (
+          // Approving spawns every member and starts the scheduler, so it takes
+          // the same two-step confirmation the less destructive Discard already
+          // used. The copy for this existed in both dictionaries but was never
+          // rendered, and the button used to act on the first click.
+          <span className={css.planApproveActions}>
+            <button type="button" disabled={busy} onClick={() => { setApproveArmed(false) }}>{t('plan.cancel')}</button>
+            <button type="button" data-plan-approve data-confirming disabled={busy} onClick={() => { void approve() }}>
+              {busy ? t('plan.approving') : t('plan.approveConfirm')}
+            </button>
+          </span>
         ) : (
           <span className={css.planReviewActions}>
-            <button type="button" data-plan-approve disabled={busy || !runnable || hasPendingEdits} onClick={() => { void approve() }}>
-              {t('plan.approve')}
+            <button type="button" data-plan-approve disabled={busy || !runnable || hasPendingEdits} onClick={() => { setApproveArmed(true); setFeedback(undefined) }}>
+              {busy ? t('plan.approving') : t('plan.approve')}
             </button>
             <span className={css.planSecondaryActions}>
               <button type="button" data-plan-continue disabled={busy} onClick={() => { void continueInChat() }}>

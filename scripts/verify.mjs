@@ -237,6 +237,18 @@ check(
     && !existsSync(new URL('../lib/types/client/TeamProgressBanner.d.ts', import.meta.url)),
 )
 check(
+  'approving a staged plan is confirmed and collapsing a section keeps its editors mounted',
+  stagingPlanSource.includes('approveArmed')
+    && stagingPlanSource.includes("t('plan.approveConfirmTitle')")
+    && stagingPlanSource.includes("t('plan.approving')")
+    && stagingPlanSource.includes("style={{ display: membersOpen ? undefined : 'none' }}")
+    && stagingPlanSource.includes("style={{ display: tasksOpen ? undefined : 'none' }}"),
+)
+check(
+  'a polled plan update cannot overwrite an unsaved edit in either editor',
+  (stagingPlanSource.match(/if \(dirty \|\| busy\) return/gu) ?? []).length >= 2,
+)
+check(
   'staged member routes use the official directory and primitive Menu instead of native route selects',
   clientIndexSource.includes('@deepseek-ai/dsh-client-ui-model-selection/client')
     && stagingPlanSource.includes('directory.store.subscribe')
