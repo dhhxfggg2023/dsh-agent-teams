@@ -28,7 +28,7 @@
 
 `dsh-agent-teams` turns the current DeepSeek Harness session into a captain that can assemble durable sub-agents, split a goal into dependency-aware tasks, and coordinate work through direct messages.
 
-Ask in natural language. The plugin provides the team protocol, 14 coordination tools, persistent state, an automatic shared-task scheduler, and a live Web UI—without requiring a separate workflow engine.
+Ask in natural language. The plugin provides the team protocol, 15 coordination tools, persistent state, an automatic shared-task scheduler, and a live Web UI—without requiring a separate workflow engine.
 
 <p align="center">
   <img src="./assets/readme/workspace.png" width="100%" alt="AgentTeams native workspace with members, task dependencies, and progress">
@@ -36,7 +36,7 @@ Ask in natural language. The plugin provides the team protocol, 14 coordination 
 
 ## Releases
 
-[v0.1.28](./release-notes/v0.1.28.md) makes the plugin survive the states a healthy run never reaches: an interrupted hand-off no longer leaves a member and its task permanently stranded, a mailbox whose team was archived no longer deletes the message body it was carrying, settled mailbox records are compacted inside the acknowledgement that already rewrites the file, and the staged-plan editor keeps unsaved edits when a section is collapsed or a polled update arrives. It still installs on any Harness version, verified on `0.2.1-rc.3`; see [compatibility.json](./compatibility.json).
+[v0.1.29](./release-notes/v0.1.29.md) merges the upstream team-workspace refresh into this line: completion and inbox cards, claimed tasks shown apart from open ones, optional inputs and a gateway-materialized empty inline plan treated as omitted, and stored session formats read from the live host. It also keeps the durability fixes of [v0.1.28](./release-notes/v0.1.28.md): an interrupted hand-off no longer leaves a member and its task permanently stranded, a mailbox whose team was archived no longer deletes the message body it was carrying, settled mailbox records are compacted inside the acknowledgement that already rewrites the file, and the staged-plan editor keeps unsaved edits when a section is collapsed or a polled update arrives. It still installs on any Harness version, verified on `0.2.1-rc.3`; see [compatibility.json](./compatibility.json).
 
 ## Why AgentTeams?
 
@@ -55,19 +55,19 @@ The conversation card and activity panel use Harness's official locale service. 
 
 ## Install and choose versions
 
-**Recommended pair: DeepSeek Harness `0.2.1-rc.3` + AgentTeams `0.1.28`. The host remains an RC.**
+**Recommended pair: DeepSeek Harness `0.2.1-rc.3` + AgentTeams `0.1.29`. The host remains an RC.**
 
 Any Harness version is installable: the plugin no longer pins exact host versions in its peer declarations, so a host that ships after this release does not need a plugin release to be installed. The pair below is the tested matrix, not an installation gate — on a host outside it, `node scripts/doctor.mjs --host-root <path> --json` reports the host as untested, and the runtime refuses a missing contract with a named diagnostic instead of guessing.
 
 | Use case | DeepSeek Harness | AgentTeams plugin |
 | --- | --- | --- |
-| **Recommended** | **`0.2.1-rc.3`** | **`0.1.28`** |
-| Any other version | any version | `0.1.28` (untested, installable) |
-| Previous recommended RC | `0.2.1-rc.2`, `0.2.1-rc.1`, `0.2.0-rc.2`, `0.1.7-rc.2` | `0.1.28` |
-| Legacy RC | `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.5-rc.3` | `0.1.28` |
-| Retaining an older RC | `0.1.2-rc.1` | `0.1.28` |
-| Developer Alpha testing | `0.1.2-alpha.5` | `0.1.28` |
-| Retaining an older Alpha | `0.1.2-alpha.2` | `0.1.28` |
+| **Recommended** | **`0.2.1-rc.3`** | **`0.1.29`** |
+| Any other version | any version | `0.1.29` (untested, installable) |
+| Previous recommended RC | `0.2.1-rc.2`, `0.2.1-rc.1`, `0.2.0-rc.2`, `0.1.7-rc.2` | `0.1.29` |
+| Legacy RC | `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.5-rc.3` | `0.1.29` |
+| Retaining an older RC | `0.1.2-rc.1` | `0.1.29` |
+| Developer Alpha testing | `0.1.2-alpha.5` | `0.1.29` |
+| Retaining an older Alpha | `0.1.2-alpha.2` | `0.1.29` |
 
 ### Desktop app
 
@@ -77,7 +77,7 @@ In the app sidebar, open **Plugins → Add plugin** and enter the npm package sp
 @nanmicoder/dsh-agent-teams
 ```
 
-The package name resolves npm `latest`. To pin a version, append `@0.1.28`. Install it, then choose **Enable now**. If the host asks for a restart, restart the desktop app. Use the package spec above for the published build; an npm or GitHub webpage URL is not the same install source. For Git installation, use a commit containing the verified build outputs described below.
+The package name resolves npm `latest`. To pin a version, append `@0.1.29`. Install it, then choose **Enable now**. If the host asks for a restart, restart the desktop app. Use the package spec above for the published build; an npm or GitHub webpage URL is not the same install source. For Git installation, use a commit containing the verified build outputs described below.
 
 The desktop app supplies its own Harness core and package manager. Upgrading the global CLI does not upgrade that core, and an ordinary standalone CLI cannot manage its desktop profile. The CLI carrier installed by the desktop app can manage that profile on `0.2.1-rc.3`. Because the plugin no longer pins exact host versions, a desktop core that updates ahead of this release still installs; check the embedded core against the compatibility list to see whether that version is in the tested matrix. See the [0.2.1-rc.3 evidence](./docs/harness-0.2.1-rc.3/README.md).
 
@@ -92,7 +92,7 @@ Skip this if you already run this version. Alpha is opt-in: select an exact Alph
 
 ### CLI / Web: 2. Install the AgentTeams plugin
 
-Install or upgrade from npm using the package name (resolves npm `latest`, currently `0.1.28`):
+Install or upgrade from npm using the package name (resolves npm `latest`, currently `0.1.29`):
 
 ```sh
 dsh plugin --profile web add --save-exact @nanmicoder/dsh-agent-teams
@@ -131,7 +131,7 @@ Team state is stored under `<workspace>/.agent-teams/`; the Web panel reads that
 
 Member creation is zero-interaction by default: a member on the captain's current LLM route snapshots that provider, model, and reasoning effort, while a member on a requested alternative route snapshots the target model's default effort; later continuations restore the resolved snapshot. Only an explicit heterogeneous-team request (for example, “backend on provider A/model X, frontend on provider B/model Y”) supplies a member-specific `provider` + `model`; there is no per-member model or reasoning prompt.
 
-Captain sessions keep the concise core protocol and the original 14 native team tools from their first request. All business tools are directly available; no loading tool or extra activation call is needed. Configured profiles retain their bounded directory in the fixed system prompt. Creating, approving, continuing or ending a team does not rewrite the system prompt or tool schemas. Core rules remain available after history compaction or discarded code-mode tool results. Members receive four team tools, fixed member instructions, and their ordinary coding/research tools. Web approval wakes the captain with a control message; later member reports wake it again. See the [fixed protocol and benchmark contract](./docs/progressive-loading.md).
+Captain sessions keep the concise core protocol and the 15 native team tools from their first request. All business tools are directly available; no loading tool or extra activation call is needed. Configured profiles retain their bounded directory in the fixed system prompt. Creating, approving, continuing or ending a team does not rewrite the system prompt or tool schemas. Core rules remain available after history compaction or discarded code-mode tool results. Members receive four team tools, fixed member instructions, and their ordinary coding/research tools. Web approval wakes the captain with a control message; later member reports wake it again. See the [fixed protocol and benchmark contract](./docs/progressive-loading.md).
 
 ## Slash command
 
