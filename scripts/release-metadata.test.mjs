@@ -38,13 +38,15 @@ for (const suffix of ['alpha', 'beta', 'rc']) {
   })
 }
 
-test('reject unsupported versions and unbounded peers', () => {
+test('reject unsupported versions and bounded peer declarations', () => {
   for (const version of ['0.1.16-dev.1', '0.1.16-alpha.01', '0.1.16-alpha.1\n', 'v0.1.16', '0.1']) {
     assert.throws(() => releaseMetadata(fixture(version, 'next')))
   }
+  // A peer that pins a host version is now the rejected shape: it makes the next
+  // host release uninstallable until a plugin release catches up.
   const mixed = fixture('0.1.16-rc.1', 'next')
   mixed.peerDependencies['@deepseek-ai/dsh-agent'] = '^0.1.2-alpha.2'
-  assert.throws(() => releaseMetadata(mixed), /enumerate/)
+  assert.throws(() => releaseMetadata(mixed), /installable/)
 })
 
 test('checked-in candidate has consistent dependency and release metadata', () => {

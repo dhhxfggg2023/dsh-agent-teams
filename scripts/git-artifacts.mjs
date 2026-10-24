@@ -17,14 +17,32 @@ function files(root, directory) {
 }
 function digest(root, paths, prefix = '') {
   const hash = createHash('sha256').update(prefix)
-  for (const path of [...paths].sort()) hash.update(path).update('\0').update(readFileSync(join(root, path))).update('\0')
+  for (const path of [...paths].sort()) hash.update(path).update('\0').update(asRepositoryBytes(readFileSync(join(root, path)))).update('\0')
   return hash.digest('hex')
+}
+/**
+ * Hash the bytes Git stores, not the bytes this checkout materialised. A Windows
+ * clone with `core.autocrlf=true` writes CRLF into the working tree, so hashing
+ * the file as read makes the stamp a record of the author's line endings: it can
+ * never be reproduced by a checkout on another platform, which is how a shipped
+ * commit ends up failing its own gate. Normalising CRLF to LF makes the digest
+ * identical on every platform and on the committed blob itself.
+ */
+function asRepositoryBytes(bytes) {
+  if (!bytes.includes(0x0d)) return bytes
+  const normalized = Buffer.allocUnsafe(bytes.length)
+  let length = 0
+  for (let index = 0; index < bytes.length; index++) {
+    if (bytes[index] === 0x0d && bytes[index + 1] === 0x0a) continue
+    normalized[length++] = bytes[index]
+  }
+  return normalized.subarray(0, length)
 }
 function current(root) {
   for (const path of REQUIRED) if (!existsSync(join(root, path))) throw new Error(`Missing Git artifact: ${path}; run pnpm build`)
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   const settings = JSON.stringify({ name: pkg.name, version: pkg.version, type: pkg.type, exports: pkg.exports, devDependencies: pkg.devDependencies, dependencies: pkg.dependencies, build: pkg.scripts?.build })
-  return { schema: 1, source: digest(root, [...files(root, 'src'), ...CONFIG], settings), output: digest(root, files(root, 'lib').filter(path => path !== STAMP)) }
+  return { schema: 2, source: digest(root, [...files(root, 'src'), ...CONFIG], settings), output: digest(root, files(root, 'lib').filter(path => path !== STAMP)) }
 }
 export function writeGitArtifactStamp(root) {
   writeFileSync(join(root, STAMP), JSON.stringify(current(root), null, 2) + '\n')

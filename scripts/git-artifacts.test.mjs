@@ -13,7 +13,22 @@ function fixture(t) {
   return { root, put }
 }
 test('complete build matches its stamp and README changes do not invalidate it', t => {
-  const { root, put } = fixture(t); writeGitArtifactStamp(root); put('README.md', 'new instructions'); assert.equal(verifyGitArtifacts(root).schema, 1)
+  const { root, put } = fixture(t); writeGitArtifactStamp(root); put('README.md', 'new instructions'); assert.equal(verifyGitArtifacts(root).schema, 2)
+})
+// A Windows checkout with core.autocrlf=true materialises CRLF while the blob
+// Git stores is LF. Hashing the working-tree bytes made the stamp a record of
+// the author's line endings, so the same source failed its own gate on the
+// other platform. The digest must not change when only the line endings do.
+test('line-ending differences between checkouts do not invalidate the stamp', t => {
+  const { root, put } = fixture(t)
+  put('src/index.ts', 'export const a = 1\r\nexport const b = 2\r\n')
+  put('lib/index.js', 'export const a = 1\r\n')
+  writeGitArtifactStamp(root)
+  put('src/index.ts', 'export const a = 1\nexport const b = 2\n')
+  put('lib/index.js', 'export const a = 1\n')
+  assert.doesNotThrow(() => verifyGitArtifacts(root))
+  put('src/index.ts', 'export const a = 1\nexport const b = 3\n')
+  assert.throws(() => verifyGitArtifacts(root), /stale or modified/)
 })
 test('source changes require rebuilding', t => {
   const { root, put } = fixture(t); writeGitArtifactStamp(root); put('src/index.ts', 'changed'); assert.throws(() => verifyGitArtifacts(root), /stale or modified/)

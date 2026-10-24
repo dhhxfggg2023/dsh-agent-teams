@@ -131,7 +131,9 @@ if (plugin.name !== '@nanmicoder/dsh-agent-teams') throw Error('Artifact package
 const runs = await runRuntimeScenarios({ report, runtime, command, environment, selectedScenarios: flags.has('--scenario') ? [flags.get('--scenario')] : scenarios });
 // Exercise the same compatibility gate used by the plugin settings UI. Runtime
 // fixtures alone link the package directly and cannot prove installation works.
-if (version === '0.2.1-rc.2') {
+// The target is read from the policy, never restated: a hard-coded version here
+// silently drops the only real installation evidence on the next host bump.
+if (version === policy.recommendedHost) {
     const home = join(report, 'plugin-install-home');
     const install = await command([process.execPath, join(runtime, 'node_modules/@deepseek-ai/dsh/lib/bin.js'), 'plugin', '--profile', 'web', 'add', '--save-exact', resolve(flags.get('--artifact'))], runtime, environment({ DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' }), 'plugin-manager-install', 120000);
     const installedPath = join(home, 'profiles/web/node_modules/@nanmicoder/dsh-agent-teams/package.json');

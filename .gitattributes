@@ -1,0 +1,13 @@
+# Keep every text file at LF in the repository and in every checkout. The build
+# stamp records byte digests of src/ and lib/, so without this a Windows clone
+# (core.autocrlf=true) materialises CRLF bytes the stamp can never match, and a
+# stamp written on Windows can never match the Ubuntu checkout either.
+* text=auto eol=lf
+
+# These are compared byte for byte by scripts/git-artifacts.mjs; never let a
+# platform filter touch them.
+lib/** -text
+assets/** -text
+*.png binary
+*.webp binary
+*.ico binary

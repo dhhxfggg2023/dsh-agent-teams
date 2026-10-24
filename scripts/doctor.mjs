@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { policy, serverRuntimePeers, validatePolicy } from './compatibility.mjs'
+import { policy, satisfiesCorridor, serverRuntimePeers, validatePolicy } from './compatibility.mjs'
 
 function manifest(path) {
   return JSON.parse(readFileSync(path, 'utf8'))
@@ -73,7 +73,12 @@ export function inspectInstallation(hostRoot, profileRoot, support = policy) {
   if (plugin && plugin.version !== policyPackage.version) {
     problems.push(`Installed plugin ${plugin.version} differs from this policy's plugin ${policyPackage.version}; verify its own host compatibility`)
   }
-  if (!allowed.includes(host.version) && !sourceCandidate) problems.push(`Unsupported host ${host.version}; recommended target is ${support.recommendedHost}`)
+  // A host the plugin has not been tested against is still installable when the
+  // declared corridor admits it: the runtime adapters detect the APIs they need
+  // and refuse with a diagnostic instead of guessing, so this is a warning about
+  // untested coverage rather than a broken installation.
+  const inCorridor = typeof support.hostCorridor === 'string' && satisfiesCorridor(host.version, support.hostCorridor)
+  if (!allowed.includes(host.version) && !sourceCandidate && !inCorridor) problems.push(`Unsupported host ${host.version}; recommended target is ${support.recommendedHost}`)
   if (mixed.length) problems.push(`${mixed.length} resolved DSH packages differ from host ${host.version}`)
   if (missing.length) problems.push(`Missing packages: ${[...new Set(missing)].join(', ')}`)
   const identities = new Map()
@@ -89,11 +94,12 @@ export function inspectInstallation(hostRoot, profileRoot, support = policy) {
     host: { version: host.version, path: dirname(hostPath) },
     ...(plugin ? { plugin } : {}),
     checkedPackages: packages.length, supportedHosts: allowed,
-    validation: sourceCandidate ? { kind: 'source-preview', ...sourceCandidate, sourceCommitVerified: false } : { kind: allowed.includes(host.version) ? 'published-matrix' : 'unsupported' },
+    validation: sourceCandidate ? { kind: 'source-preview', ...sourceCandidate, sourceCommitVerified: false } : { kind: allowed.includes(host.version) ? 'published-matrix' : inCorridor ? 'corridor-untested' : 'unsupported' },
     problems, packages,
     limits: [
       'Checks files resolved from the supplied roots; does not identify the running process or prove plugin behavior.',
       ...(sourceCandidate ? [`Host ${host.version} is pre-adapted against source ${sourceCandidate.commit}; this inspection does not verify that the installed release matches that source.`] : []),
+      ...(inCorridor && !allowed.includes(host.version) ? [`Host ${host.version} is inside the declared corridor but not in the tested matrix; only ${support.recommendedHost} and the other listed targets carry release verification.`] : []),
     ],
   }
 }

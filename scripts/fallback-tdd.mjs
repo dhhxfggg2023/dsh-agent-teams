@@ -39,7 +39,10 @@ const assignment = assignmentPrompt({ taskId: 't1', memberName: 'worker', member
 const persona = memberPersona({ name: 'Demo', id: 'demo', description: 'goal', captainSessionId: 'c', createdAt: 0, profile: { name: 'demo' }, members: [], tasks: [], taskSeq: 0 }, { name: 'worker', id: 'm', executionPrompt: prompt, joinedAt: 0, status: 'idle' }, '.agent-teams')
 check('prompt is present in assignment', assignment.includes(prompt))
 check('prompt is present in persona', persona.includes(prompt))
-check('assignment does not require process disclosure', !assignment.includes('record the process') || assignment.includes(prompt))
+// The disjunct that used to sit here (`|| assignment.includes(prompt)`) was
+// always true — line 40 already asserts the prompt is present — so this check
+// could not fail even if the assignment started demanding process disclosure.
+check('assignment does not require process disclosure', !assignment.includes('record the process'))
 
 const allowed = ['QUOTA', 'RATE_LIMIT', 'AUTH', 'MISSING_CREDENTIAL', 'NO_ADAPTER']
 const denied = ['CONTEXT_WINDOW_EXCEEDED', 'INVALID_CREDENTIAL', 'INVALID_ARGS', 'TASK_FAILED']

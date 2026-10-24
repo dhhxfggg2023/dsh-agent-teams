@@ -109,6 +109,28 @@ export interface MemberSelectionRuntime {
     isPendingMember(agent: Agent): boolean;
     /** Make one selection visible while Harness materializes the fresh child. */
     withPending<T>(parentSessionId: string, label: string, selection: MemberLlmSelection, operation: () => Promise<T>, setup?: TeamMember['runtimeSetup']): Promise<T>;
+    /**
+     * Switch one member's LLM route without recreating it.
+     *
+     * A live child keeps its session and history: mutating the same selection ref
+     * `installModelSelection` reads makes the next prompt assembly and request use
+     * the new route, and the host appends its own `[model changed: …]` notice. A
+     * member that is not live has the route persisted (`activeProvider` /
+     * `activeModel`) for its next activation.
+     * @returns the previous route label and whether a live child was updated.
+     */
+    setRoute(input: {
+        stateRoot: string;
+        teamId: string;
+        memberName: string;
+        provider: string;
+        model: string;
+        reasoningEffort?: string;
+        signal?: AbortSignal;
+    }): Promise<{
+        previous: string;
+        live: boolean;
+    }>;
 }
 /**
  * Validate a resolved roster against every provider catalog before any child

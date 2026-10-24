@@ -6,14 +6,15 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { inspectInstallation } from './doctor.mjs'
-import { policy, workspacePolicy, requiredHostPeers, validatePolicy, validatePackageCompatibility, declaredHostVersions } from './compatibility.mjs'
+import { policy, workspacePolicy, requiredHostPeers, satisfiesCorridor, validatePolicy, validatePackageCompatibility, declaredHostVersions } from './compatibility.mjs'
+import { parseWorkspacePolicy } from './workspace-policy.mjs'
 
 const sourcePolicy = { ...policy, sourceCandidates: [{ version: '0.2.0', repository: 'https://github.com/deepseek-ai/deepseek-harness', commit: '21638c56315ae6a2b552d6091945d3144c9af32e', evidence: 'docs/harness-0.2.0-pre-adaptation/README.md' }] }
 
 test('source candidates pass the peer gate without entering the published download matrix', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-  for (const name of Object.keys(pkg.peerDependencies)) if (name.startsWith('@deepseek-ai/dsh-')) pkg.peerDependencies[name] += ' || 0.2.0'
   assert.ok(declaredHostVersions(sourcePolicy).includes('0.2.0'))
+  assert.ok(satisfiesCorridor('0.2.0', policy.hostCorridor), 'the corridor must admit a candidate release, not only its prereleases')
   assert.ok(!validatePackageCompatibility(pkg, sourcePolicy).includes('0.2.0'))
   const matrix = spawnSync(process.execPath, [fileURLToPath(new URL('./compatibility.mjs', import.meta.url)), '--github-output'], { encoding: 'utf8' })
   assert.equal(matrix.status, 0, matrix.stderr)
@@ -25,8 +26,9 @@ test('source candidates pass the peer gate without entering the published downlo
     [{ ...sourcePolicy.sourceCandidates[0], commit: 'master' }],
     [{ ...sourcePolicy.sourceCandidates[0], version: policy.recommendedHost }],
   ]) assert.throws(() => validatePolicy({ ...policy, sourceCandidates }), /Source candidates/)
-  pkg.peerDependencies['@deepseek-ai/dsh-agent'] = pkg.peerDependencies['@deepseek-ai/dsh-agent'].replace(' || 0.2.0', '')
-  assert.throws(() => validatePackageCompatibility(pkg, sourcePolicy), /source candidates/)
+  const shortened = structuredClone(pkg)
+  shortened.peerDependencies['@deepseek-ai/dsh-agent'] = '>=0.2.1-rc.3 <0.3.0'
+  assert.throws(() => validatePackageCompatibility(shortened, sourcePolicy), /installable/)
 })
 
 test('doctor distinguishes source-preview acceptance from released host validation', t => {
@@ -180,9 +182,44 @@ test('doctor detects peer-only drift and a mismatched installed plugin', t => {
 })
 
 test('released target enters the download matrix and replaces the old source prediction', () => {
-  assert.equal(policy.recommendedHost, '0.2.1-rc.2')
+  assert.equal(policy.recommendedHost, '0.2.1-rc.3')
+  assert.ok(validatePolicy(policy).includes('0.2.1-rc.3'))
   assert.ok(validatePolicy(policy).includes('0.2.1-rc.2'))
   assert.ok(validatePolicy(policy).includes('0.2.1-rc.1'))
   assert.ok(validatePolicy(policy).includes('0.2.0-rc.2'))
   assert.ok(!declaredHostVersions().includes('0.2.0'))
+})
+
+test('the corridor admits a future host on a tested line and refuses an untested one', () => {
+  const corridor = policy.hostCorridor
+  // Installability no longer depends on this list (peers are `*`), but doctor and
+  // CI still report coverage from it: later prereleases and releases on the
+  // current line are inside, an older line or 0.3 is outside.
+  for (const version of ['0.2.1-rc.4', '0.2.1', '0.2.2', '0.2.99']) {
+    assert.ok(satisfiesCorridor(version, corridor), `${version} must be inside the corridor`)
+  }
+  for (const version of ['0.3.0', '0.2.0-rc.1', '0.1.1-rc.2', '0.1.0', '0.1.8', '1.0.0']) {
+    assert.ok(!satisfiesCorridor(version, corridor), `${version} must be outside the corridor`)
+  }
+  // npm's prerelease rule: a prerelease only matches a comparator set that names
+  // a prerelease of the same X.Y.Z, so a patch-level prerelease such as
+  // 0.2.2-rc.1 is untested until a line is added for it. Installation still
+  // succeeds; doctor reports it as corridor-untested rather than supported.
+  assert.ok(!satisfiesCorridor('0.2.2-rc.1', corridor))
+  assert.ok(!satisfiesCorridor('0.2.0-rc.2', '>=0.2.1-rc.1 <0.3.0'))
+  assert.ok(satisfiesCorridor('0.2.1-rc.3', '>=0.2.1-rc.1 <0.3.0'))
+  for (const host of policy.supportedHosts) assert.ok(satisfiesCorridor(host.version, corridor), `${host.version} is declared but outside the corridor`)
+})
+
+test('the workspace reader survives the YAML keys pnpm appends on install', () => {
+  const text = readFileSync(new URL('../pnpm-workspace.yaml', import.meta.url), 'utf8')
+  const overrides = parseWorkspacePolicy(text).overrides
+  assert.equal(overrides['@deepseek-ai/dsh'], policy.recommendedHost)
+  // pnpm appends `minimumReleaseAgeExclude` as real YAML, which used to make the
+  // whole gate throw "Expected double-quoted property name" after an install.
+  const appended = text.replace(/\}\s*$/, '}, minimumReleaseAgeExclude: [ \'@deepseek-ai/dsh@0.2.1-rc.3\' ] }')
+  assert.equal(parseWorkspacePolicy(appended).overrides['@deepseek-ai/dsh'], policy.recommendedHost)
+  const block = ['packages:', '  - .', 'overrides:', '  "@deepseek-ai/dsh": 0.2.1-rc.3', '  "@deepseek-ai/dsh-agent": 0.2.1-rc.3', 'autoInstallPeers: true'].join('\n')
+  assert.equal(parseWorkspacePolicy(block).overrides['@deepseek-ai/dsh-agent'], policy.recommendedHost)
+  assert.throws(() => parseWorkspacePolicy('packages:\n  - .\n'), /no readable overrides/)
 })
