@@ -11,6 +11,24 @@ import { parseWorkspacePolicy } from './workspace-policy.mjs'
 
 const sourcePolicy = { ...policy, sourceCandidates: [{ version: '0.2.0', repository: 'https://github.com/deepseek-ai/deepseek-harness', commit: '21638c56315ae6a2b552d6091945d3144c9af32e', evidence: 'docs/harness-0.2.0-pre-adaptation/README.md' }] }
 
+// A file symlink on Windows needs SeCreateSymbolicLinkPrivilege, which an
+// ordinary developer token does not hold (EPERM). Probe once, so the case is
+// skipped with that reason locally instead of failing the gate; the Ubuntu CI
+// runner creates symlinks and still covers it.
+const fileSymlinksAvailable = (() => {
+  if (process.platform !== 'win32') return true
+  const probe = mkdtempSync(join(tmpdir(), 'agent-teams-symlink-probe-'))
+  try {
+    writeFileSync(join(probe, 'target'), '')
+    symlinkSync(join(probe, 'target'), join(probe, 'link'), 'file')
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(probe, { recursive: true, force: true })
+  }
+})()
+
 test('source candidates pass the peer gate without entering the published download matrix', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   assert.ok(declaredHostVersions(sourcePolicy).includes('0.2.0'))
@@ -44,7 +62,7 @@ test('doctor distinguishes source-preview acceptance from released host validati
   assert.match(result.limits.join(), /does not verify that the installed release matches/)
 })
 
-test('doctor runs through an installed bin symlink and reports success or failure', t => {
+test('doctor runs through an installed bin symlink and reports success or failure', { skip: !fileSymlinksAvailable && 'this Windows token cannot create a file symlink (no SeCreateSymbolicLinkPrivilege); Ubuntu CI covers the case' }, t => {
   const root = mkdtempSync(join(tmpdir(), 'agent-teams-doctor-bin-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const host = join(root, 'host')

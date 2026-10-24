@@ -36,6 +36,11 @@ const artifacts = await import('../lib/artifacts.js').catch(() => undefined)
 /** Real wall-clock pause: a "later round" must be later than the verdict. */
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// A Windows symlink needs SeCreateSymbolicLinkPrivilege; a junction needs none,
+// and lstat/realpath still report it as a link, so the traversal guard is
+// exercised the same way. Ubuntu keeps the plain directory symlink.
+const directoryLink = process.platform === 'win32' ? 'junction' : 'dir'
+
 const STATS_V1 = 'export const median = (xs) => xs[0]\n'
 const STATS_V2 = 'export const median = (xs) => (xs[0] + xs[1]) / 2\n'
 
@@ -270,8 +275,8 @@ test('#174: traversal never follows a symlink out of the workspace or into a cyc
   const outside = mkdtempSync(join(tmpdir(), 'issue174-outside-'))
   try {
     writeFileSync(join(outside, 'host-secret.txt'), 'not part of this project\n')
-    symlinkSync(outside, join(root, 'lib', 'escape'))
-    symlinkSync(join(root, 'lib'), join(root, 'lib', 'loop'))
+    symlinkSync(outside, join(root, 'lib', 'escape'), directoryLink)
+    symlinkSync(join(root, 'lib'), join(root, 'lib', 'loop'), directoryLink)
     const paths = artifacts.expandScopePaths(root, ['lib/'])
     assert.ok(!paths.some((path) => path.includes('[host-secret]') || path.endsWith('host-secret.txt')), `escaped the workspace: ${JSON.stringify(paths)}`)
     assert.ok(!paths.some((path) => path.includes('escape')), `followed a symlink out of the workspace: ${JSON.stringify(paths)}`)
@@ -465,7 +470,7 @@ test('#174/#161: a directory pattern that is a symlink out of the workspace is n
     writeFileSync(join(outside, 'host-only-secret.js'), 'export const leaked = true\n')
     mkdirSync(join(outside, 'nested'), { recursive: true })
     writeFileSync(join(outside, 'nested', 'deeper.js'), 'export const deeper = true\n')
-    symlinkSync(outside, join(root, 'escape'))
+    symlinkSync(outside, join(root, 'escape'), directoryLink)
     // Trailing-slash directory patterns go straight to the walker, so the
     // prefix itself must be verified before readdir.
     const readSlash = artifacts.readArtifactScope(root, ['escape/'])

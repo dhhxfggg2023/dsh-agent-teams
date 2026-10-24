@@ -1,22 +1,41 @@
 /** Shared built-product scenarios for registry releases and explicitly identified source checkouts. */
-import { mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync, symlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const json = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
+
+// Linking the prepared runtime into a profile needs a directory link. Windows
+// refuses a real symlink without SeCreateSymbolicLinkPrivilege (EPERM), while a
+// junction needs none and is reported as a symlink by lstat/realpath, so the
+// profile still resolves the same way. Ubuntu keeps the plain symlink.
+const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
 
 export const runtimeScenarios = ['lifecycle', 'fallback', 'failure', 'captain-idle-wakeup', 'progressive-entry', 'web-approval', 'protocol-compatibility', 'stability'];
 
 /** Run the same fixture and persisted-state assertions against an already prepared runtime. */
 export async function runRuntimeScenarios({ report, runtime, command, environment, selectedScenarios = runtimeScenarios, linkWorkspacePackages = false }) {
+// How many `agent_teams_*` tools the captain must see is the plugin's own
+// TEAM_TOOL_NAMES. A fixture literal here goes stale on the next tool (it
+// already did upstream), and the fixture cannot import the package by name, so
+// the count is read from the linked artifact once per scenario and handed to
+// the run through the environment.
+let expectedTeamTools;
+const baseEnvironment = environment;
+environment = extra => baseEnvironment(expectedTeamTools === undefined ? extra : { LAB_EXPECTED_TEAM_TOOLS: String(expectedTeamTools), ...extra });
 const runs = [];
 for (const scenario of selectedScenarios) {
+    // Re-running against the same report directory must produce the same
+    // profile: clear the scenario's previous home and workspace first, or the
+    // directory link below refuses with EEXIST.
+    rmSync(join(report, scenario), { recursive: true, force: true });
     const home = join(report, scenario, 'home'), profile = join(home, 'profiles', 'headless'), workspace = join(report, scenario, 'workspace');
     mkdirSync(profile, { recursive: true });
     mkdirSync(workspace, { recursive: true });
     mkdirSync(join(profile, 'node_modules/@nanmicoder'), { recursive: true });
-    if (linkWorkspacePackages) symlinkSync(join(runtime, 'node_modules/@deepseek-ai'), join(profile, 'node_modules/@deepseek-ai'), 'dir');
-    symlinkSync(join(runtime, 'node_modules/@nanmicoder/dsh-agent-teams'), join(profile, 'node_modules/@nanmicoder/dsh-agent-teams'), 'dir');
+    if (linkWorkspacePackages) symlinkSync(join(runtime, 'node_modules/@deepseek-ai'), join(profile, 'node_modules/@deepseek-ai'), directoryLink);
+    symlinkSync(join(runtime, 'node_modules/@nanmicoder/dsh-agent-teams'), join(profile, 'node_modules/@nanmicoder/dsh-agent-teams'), directoryLink);
+    expectedTeamTools = (await import(pathToFileURL(join(profile, 'node_modules/@nanmicoder/dsh-agent-teams/lib/tool-names.js')).href)).TEAM_TOOL_NAMES.length;
     json(join(profile, 'package.json'), { name: 'runtime-test-profile', version: '0.0.0', private: true, type: 'module', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless', '@nanmicoder/dsh-agent-teams'], patchReload: 'startup' } } });
     copyFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures/harness-runtime-llm.mjs'), join(profile, 'fixture-llm.mjs'));
     writeFileSync(join(profile, 'cordis.patch.yml'), `- id: llm-deepseek\n  disabled: true\n- id: llm-pi-ai\n  disabled: true\n- id: agent-default-model\n  config:\n    provider: runtime-lab\n    model: fixture-model\n- insert:\n    - id: runtime-lab-fixture\n      name: './fixture-llm.mjs'\n`);

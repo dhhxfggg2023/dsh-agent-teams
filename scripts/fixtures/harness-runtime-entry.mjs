@@ -8,6 +8,11 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 export const name = 'runtime-lab-progressive-entry';
 export const inject = ['agents', 'sessions', 'commands', 'systemPrompt', 'tools'];
+// Supplied by scripts/harness-runtime-scenarios.mjs from the artifact's own
+// TEAM_TOOL_NAMES: the captain must expose exactly the tools the plugin
+// declares. Upstream kept this as a literal and it went stale on the next tool.
+const expectedTeamTools = Number(process.env.LAB_EXPECTED_TEAM_TOOLS);
+assert.ok(Number.isInteger(expectedTeamTools), 'the runner must supply LAB_EXPECTED_TEAM_TOOLS');
 export function apply(ctx) {
     void (async () => {
         await ctx.get('loader').await();
@@ -40,7 +45,7 @@ export function apply(ctx) {
             'ENTRY_NO_ACTIVATION: Do not use AgentTeams; answer directly.',
             'ENTRY_NO_ACTIVATION: Translate this quote: "use AgentTeams to research this".',
         ]) await send(ordinary.agent, text);
-        assert.equal((await teamNames(ordinary.agent)).length, 14);
+        assert.equal((await teamNames(ordinary.agent)).length, expectedTeamTools);
         assert.equal(existsSync(join(ordinary.cwd, '.agent-teams/runtime-lab/team.json')), false);
         const cases = [
             ['natural', 'Use AgentTeams to plan this task.', false],
@@ -65,15 +70,15 @@ export function apply(ctx) {
             assert.equal(staged.members.length, 1);
             assert.ok(staged.members.every(m => !m.id));
             const requests = trace().filter(x => x.event === 'request' && !x.purpose && x.sessionId === agent.id).slice(label === 'natural' ? 30 : 0);
-            assert.equal(requests[0].toolNames.filter(n => n.startsWith('agent_teams_')).length, 14);
+            assert.equal(requests[0].toolNames.filter(n => n.startsWith('agent_teams_')).length, expectedTeamTools);
             const assembly = await ctx.systemPrompt.assemble({ agent, scope: agent });
             assert.match(assembly.sections.find(s => s.name === 'agent-teams:usage')?.text ?? '', /Tasks carry attempt_id/);
             assert.doesNotMatch(requests[1].lastToolText, /"instructions":/);
             assert.equal(requests[1].called[0], 'agent_teams_create');
             assert.ok(requests.every(request => !request.toolNames.includes('agent_teams_open')));
-            assert.equal(requests[1].toolNames.filter(n => n.startsWith('agent_teams_')).length, 14);
+            assert.equal(requests[1].toolNames.filter(n => n.startsWith('agent_teams_')).length, expectedTeamTools);
             if (input.startsWith('/')) assert.match(requests[0].userText, /Inspect existing team state with agent_teams_status/);
-            assert.equal((await teamNames(ordinary.agent)).length, 14);
+            assert.equal((await teamNames(ordinary.agent)).length, expectedTeamTools);
             await measure(agent, label.startsWith('profile') ? 'captain-profile' : 'captain');
             await send(agent, 'REOPEN_ENTRY: inspect the existing AgentTeams plan.');
             assert.equal(readFileSync(statePath, 'utf8'), before);

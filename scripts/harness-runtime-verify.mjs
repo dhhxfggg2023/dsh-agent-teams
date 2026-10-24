@@ -5,6 +5,7 @@
  * Optional: --runtime-dir <already prepared directory> --prepare-only
  */
 import { runRuntimeScenarios, runtimeScenarios } from './harness-runtime-scenarios.mjs';
+import { policy } from './compatibility.mjs';
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
@@ -36,9 +37,21 @@ const registry = 'https://registry.npmjs.org';
 const isDsh = name => /^@deepseek-ai\/dsh(?:-|$)/.test(name);
 const json = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-const environment = (extra = {}) => ({ PATH: process.env.PATH, LANG: process.env.LANG ?? 'en_US.UTF-8', HOME: join(report, 'user-home'), TMPDIR: join(report, 'tmp'), npm_config_userconfig: '/dev/null', npm_config_registry: registry, ...extra });
+// Some native install scripts in the cohort resolve their cache from
+// APPDATA/LOCALAPPDATA on Windows and abort without them ("Missing
+// LOCALAPPDATA and APPDATA environment variable" from koffi/cnoke), which the
+// Ubuntu CI never exercises. Keep the isolation by pointing them inside the
+// report directory instead of the developer's real profile.
+const platformUserDirs = () => process.platform === 'win32' ? {
+    APPDATA: join(report, 'user-home', 'AppData', 'Roaming'),
+    LOCALAPPDATA: join(report, 'user-home', 'AppData', 'Local'),
+    USERPROFILE: join(report, 'user-home'),
+} : {};
+const environment = (extra = {}) => ({ PATH: process.env.PATH, LANG: process.env.LANG ?? 'en_US.UTF-8', HOME: join(report, 'user-home'), TMPDIR: join(report, 'tmp'), npm_config_userconfig: '/dev/null', npm_config_registry: registry, ...platformUserDirs(), ...extra });
 mkdirSync(join(report, 'user-home'), { recursive: true });
 mkdirSync(join(report, 'tmp'), { recursive: true });
+mkdirSync(join(report, 'user-home', 'AppData', 'Roaming'), { recursive: true });
+mkdirSync(join(report, 'user-home', 'AppData', 'Local'), { recursive: true });
 async function command(argv, cwd, env, label, timeoutMs = 900000) {
     const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', timedOut = false;
