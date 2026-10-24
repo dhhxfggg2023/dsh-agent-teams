@@ -2580,11 +2580,6 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): Agen
       return { deleted: true, team_name: team.name }
     },
   }))
-  // Live-member hydration validates saved filters against registered tools.
-  const memberSelections = installMemberSelectionRuntime(ctx, config.stateDir, (workspace, teamId, memberName) => (
-    scheduler.kickMember(workspace, teamId, memberName)
-  ))
-
   ctx.tools.register(defineTool({
     name: 'agent_teams_set_member_model',
     description: 'Change one member\'s model route without recreating it. The member keeps its session and history; the new route takes effect on its next step, and the host records a "[model changed: …]" notice. A member that is not currently live has the route persisted for its next activation. Use only when the user asks to switch a teammate\'s model or when the current route is failing.',
@@ -2632,6 +2627,15 @@ export function registerAgentTeamsTools(ctx: Context, config: ToolsConfig): Agen
       }
     },
   }))
+
+  // Live-member hydration validates saved filters against registered tools, so
+  // every registration in this function must precede it. A tool registered
+  // after this point makes a saved member filter name a tool the registry does
+  // not know yet, and `tools.restrict()` rejects the whole filter instead of
+  // installing it — which leaves the live member unrestricted after a reload.
+  const memberSelections = installMemberSelectionRuntime(ctx, config.stateDir, (workspace, teamId, memberName) => (
+    scheduler.kickMember(workspace, teamId, memberName)
+  ))
 
   const runtime: AgentTeamsRuntime = {
     isPendingMember: memberSelections.isPendingMember,

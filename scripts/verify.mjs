@@ -249,6 +249,10 @@ check(
   (stagingPlanSource.match(/if \(dirty \|\| busy\) return/gu) ?? []).length >= 2,
 )
 check(
+  'every tool registration precedes live-member hydration, so a saved member filter always resolves',
+  toolsSource.lastIndexOf('ctx.tools.register(') < toolsSource.indexOf('installMemberSelectionRuntime(ctx'),
+)
+check(
   'staged member routes use the official directory and primitive Menu instead of native route selects',
   clientIndexSource.includes('@deepseek-ai/dsh-client-ui-model-selection/client')
     && stagingPlanSource.includes('directory.store.subscribe')
